@@ -29,10 +29,10 @@ mod HelloStarknet {
 
         // Panics
         fn do_a_panic(self: @ContractState) {
-            let mut arr = ArrayTrait::new();
-            arr.append('PANIC');
-            arr.append('DAYTAH');
-            panic(arr);
+            //let mut arr = ArrayTrait::new();
+            //arr.append('PANIC');
+            //arr.append('DAYTAH');
+            panic(array!{'PANIC', 'DAYTAH'});
         }
 
         // Panics with given array data

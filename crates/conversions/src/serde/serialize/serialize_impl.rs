@@ -15,6 +15,8 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+// use core::ops::Sub;
+use core::ops::Add;
 
 impl CairoSerialize for CallEntryPoint {
     fn serialize(&self, output: &mut BufferWriter) {
@@ -120,6 +122,12 @@ impl CairoSerialize for String {
     }
 }
 
+impl CairoSerialize for bool {
+    fn serialize(&self, output: &mut BufferWriter) {
+        if *self { 1.serialize(output); } else { 0.serialize(output); }
+    }
+}
+
 impl<T> CairoSerialize for Vec<T>
 where
     T: CairoSerialize,
@@ -189,6 +197,21 @@ macro_rules! impl_serialize_for_num_type {
     };
 }
 
+macro_rules! impl_serialize_for_signed_integers {
+    ($type:ty) => {
+        impl CairoSerialize for $type {
+            fn serialize(&self, output: &mut BufferWriter) {
+                if *self < 0 {
+                    Felt252::from(0).add(Felt252::from(*self)).serialize(output);
+                    // Felt252::from(0).sub(Felt252::from(-(*self))).serialize(output);
+                } else {
+                    Felt252::from(*self).serialize(output);
+                }
+            }
+        }
+    };
+}
+
 macro_rules! impl_serialize_for_tuple {
     ($($ty:ident),*) => {
         impl<$( $ty ),*> CairoSerialize for ( $( $ty, )* )
@@ -221,6 +244,12 @@ impl_serialize_for_num_type!(u32);
 impl_serialize_for_num_type!(u64);
 impl_serialize_for_num_type!(u128);
 impl_serialize_for_num_type!(usize);
+
+impl_serialize_for_signed_integers!(i8);
+impl_serialize_for_signed_integers!(i16);
+impl_serialize_for_signed_integers!(i32);
+impl_serialize_for_signed_integers!(i64);
+impl_serialize_for_signed_integers!(i128);
 
 impl_serialize_for_tuple!();
 impl_serialize_for_tuple!(A);
