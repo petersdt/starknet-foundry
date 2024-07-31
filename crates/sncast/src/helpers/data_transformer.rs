@@ -197,6 +197,7 @@ struct CalldataStruct {
 struct CalldataArrayMacro {
     // TODO remove name and validate that while parsing the tree
     name_with_module_path: Vec<String>,
+    abi_argument_type: String,
     arguments: Vec<AllowedCalldataArguments>
 }
 
@@ -208,6 +209,8 @@ struct CalldataEnum {
 
 #[derive(Debug)]
 struct CalldataSingleArgument {
+    value: String,
+    abi_type: String
 }
 
 #[derive(Debug)]
@@ -217,7 +220,7 @@ enum AllowedCalldataArguments {
     ArrayMacro(CalldataArrayMacro),
     Enum(CalldataEnum),
     // TODO rename to BasicType or smth
-    SingleArgument(String),
+    SingleArgument(CalldataSingleArgument),
     Tuple(Vec<AllowedCalldataArguments>),
 }
 
@@ -277,7 +280,7 @@ fn resolve_name_with_module_path(node: SyntaxNode, simple_db: &SimpleParserDatab
     }).collect()
 }
 
-fn parse_expr(expr: Expr, db: &SimpleParserDatabase) -> Result<AllowedCalldataArguments> {
+fn parse_expr(expr: Expr, param: AbiNamedMember, db: &SimpleParserDatabase) -> Result<AllowedCalldataArguments> {
     match expr {
         Expr::StructCtorCall(expr_struct_ctor_call) => {
             // two possibilities here: PathSegmentWithGenericArgs and PathSegmentSimple
@@ -337,22 +340,33 @@ fn parse_expr(expr: Expr, db: &SimpleParserDatabase) -> Result<AllowedCalldataAr
         }
         Expr::Literal(literal_number) => {
             // TODO consider turning that into a number (to simplify CairoSerialize later?)
-            Ok(AllowedCalldataArguments::SingleArgument(literal_number.token(db).text(db).to_string()))
+            let value = literal_number.token(db).text(db).to_string();
+            let abi_type = param.r#type;
+            Ok(AllowedCalldataArguments::SingleArgument(CalldataSingleArgument{value, abi_type}))
         }
         Expr::ShortString(terminal_short_string) => {
-            Ok(AllowedCalldataArguments::SingleArgument(terminal_short_string.token(db).text(db).to_string()))
+            let value = terminal_short_string.token(db).text(db).to_string();
+            let abi_type = param.r#type;
+            Ok(AllowedCalldataArguments::SingleArgument(CalldataSingleArgument{value, abi_type}))
         }
         Expr::String(terminal_string) => {
-            Ok(AllowedCalldataArguments::SingleArgument(terminal_string.token(db).text(db).to_string()))
+            let value = terminal_string.token(db).text(db).to_string();
+            let abi_type = param.r#type;
+            Ok(AllowedCalldataArguments::SingleArgument(CalldataSingleArgument{value, abi_type}))
         }
         Expr::False(terminal_false) => {
-            Ok(AllowedCalldataArguments::SingleArgument(terminal_false.token(db).text(db).to_string()))
+            let value = terminal_false.token(db).text(db).to_string();
+            let abi_type = param.r#type;
+
+            Ok(AllowedCalldataArguments::SingleArgument(CalldataSingleArgument{value, abi_type}))
         }
         Expr::True(terminal_true) => {
-            Ok(AllowedCalldataArguments::SingleArgument(terminal_true.token(db).text(db).to_string()))
+            let value = terminal_true.token(db).text(db).to_string();
+            let abi_type = param.r#type;
+            Ok(AllowedCalldataArguments::SingleArgument(CalldataSingleArgument{value, abi_type}))
         }
         Expr::Parenthesized(expr_parenthesized) => {
-            parse_expr(expr_parenthesized.expr(db), db)
+            parse_expr(expr_parenthesized.expr(db), param, db)
         }
         Expr::Path(expr_path) => {
             // enum?
@@ -382,7 +396,7 @@ fn parse_expr(expr: Expr, db: &SimpleParserDatabase) -> Result<AllowedCalldataAr
                     }
                     let arguments = arg_list_elements.iter().filter_map(|arg| match arg.arg_clause(db) {
                         ArgClause::Unnamed(arg_clause_unnamed) => {
-                            parse_expr(arg_clause_unnamed.value(db), db).ok()
+                            parse_expr(arg_clause_unnamed.value(db), param, db).ok()
                         },
                         ArgClause::Named(_) | ArgClause::FieldInitShorthand(_) => None
                     }).collect();
@@ -394,6 +408,8 @@ fn parse_expr(expr: Expr, db: &SimpleParserDatabase) -> Result<AllowedCalldataAr
                             None
                         }
                     }).collect();
+                    let array_re = Regex::new(".*")
+                    let abi_argument_type =
                     Ok(AllowedCalldataArguments::ArrayMacro(CalldataArrayMacro { name_with_module_path, arguments } ))
                 }
                 WrappedArgList::ParenthesizedArgList(_) | WrappedArgList::BracedArgList(_) => {
@@ -405,7 +421,7 @@ fn parse_expr(expr: Expr, db: &SimpleParserDatabase) -> Result<AllowedCalldataAr
             }
         }
          Expr::Tuple(expr_list_parenthesized) => {
-             let parsed_exprs = expr_list_parenthesized.expressions(db).elements(db).into_iter().map(|expr| parse_expr(expr, db)).collect::<Result<Vec<_>>>()?;
+             let parsed_exprs = expr_list_parenthesized.expressions(db).elements(db).into_iter().map(|expr| parse_expr(expr, param, db)).collect::<Result<Vec<_>>>()?;
              Ok(AllowedCalldataArguments::Tuple(parsed_exprs))
          }
 
@@ -881,6 +897,7 @@ async fn transform_input_calldata(
             let called_function = find_new_abi_fn(&abi, function_name).context(format!("Function {} not found in contract with address {}", function_name, contract_address))?;
 
             // TODO should it be here? or should chain validate if args list is of a valid length
+            //  it's like frontend validation
             if called_function.inputs.len() != arguments_expr_list.len() {
                 bail!("Invalid number of arguments, passed {}, expected {}", arguments_expr_list.len(), called_function.inputs.len())
             }
@@ -893,6 +910,11 @@ async fn transform_input_calldata(
                 }
             }).collect::<Vec<&AbiStruct>>();
 
+            // DO THE NEW STRUCTS HERE, ADD TO SINGLE VALUE A TYPE FROM ABI
+            // ALLOWS EASIER SERIALIZATION
+            for (param, arg) in called_function.inputs.iter().zip(arguments_expr_list) {
+
+            }
 
         }
         ContractClass::Legacy(legacy_class) => {
