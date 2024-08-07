@@ -23,8 +23,8 @@ pub struct Deploy {
     pub class_hash: FieldElement,
 
     /// Calldata for the contract constructor
-    #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub constructor_calldata: Vec<FieldElement>,
+    #[clap(short, long)]
+    pub constructor_calldata: String,
 
     /// Salt for the address
     #[clap(short, long)]

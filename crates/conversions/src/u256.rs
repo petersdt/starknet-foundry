@@ -1,7 +1,7 @@
 use crate as conversions; // trick for CairoDeserialize macro
 use cairo_serde_macros::{CairoDeserialize, CairoSerialize};
 
-#[derive(CairoDeserialize, CairoSerialize)]
+#[derive(CairoDeserialize, CairoSerialize, Debug)]
 pub struct CairoU256 {
     low: u128,
     high: u128,

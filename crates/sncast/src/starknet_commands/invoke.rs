@@ -23,8 +23,8 @@ pub struct Invoke {
     pub function: String,
 
     /// Calldata for the invoked function
-    #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub calldata: Vec<FieldElement>,
+    #[clap(short, long)]
+    pub calldata: String,
 
     #[clap(flatten)]
     pub fee: FeeArgs,

@@ -18,8 +18,8 @@ pub struct Call {
     pub function: String,
 
     /// Arguments of the called function (list of hex)
-    #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub calldata: Vec<FieldElement>,
+    #[clap(short, long)]
+    pub calldata: String,
 
     /// Block identifier on which call should be performed.
     /// Possible values: pending, latest, block hash (0x prefixed string)

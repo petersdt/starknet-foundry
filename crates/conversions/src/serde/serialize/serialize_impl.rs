@@ -123,6 +123,7 @@ impl CairoSerialize for String {
 }
 
 impl CairoSerialize for bool {
+    // bool in Cairo is stored as an enum
     fn serialize(&self, output: &mut BufferWriter) {
         if *self { 1.serialize(output); } else { 0.serialize(output); }
     }
