@@ -17,9 +17,9 @@ pub struct Call {
     #[clap(short, long)]
     pub function: String,
 
-    /// Arguments of the called function (list of hex)
+    /// Arguments of the called function - Cairo-like expression
     #[clap(short, long)]
-    pub calldata: String,
+    pub calldata: Option<String>,
 
     /// Block identifier on which call should be performed.
     /// Possible values: pending, latest, block hash (0x prefixed string)

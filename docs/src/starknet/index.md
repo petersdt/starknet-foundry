@@ -33,7 +33,7 @@ $ sncast --account myuser \
     call \
     --contract-address 0x38b7b9507ccf73d79cb42c2cc4e58cf3af1248f342112879bfdf5aa4f606cc9 \
     --function get \
-    --calldata 0x0 \
+    --calldata {0x0}
     --block-id latest
 
 command: call

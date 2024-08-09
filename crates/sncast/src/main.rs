@@ -10,22 +10,25 @@ use sncast::response::print::{print_command_result, OutputFormat};
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
-use starknet::core::types::{BlockId, BlockTag};
 use shared::verify_and_warn_if_incompatible_rpc_version;
 use sncast::helpers::configuration::CastConfig;
 use sncast::helpers::constants::{DEFAULT_ACCOUNTS_FILE, DEFAULT_MULTICALL_CONTENTS};
+use sncast::helpers::data_transformer::transform_input_calldata;
 use sncast::helpers::scarb_utils::{
     assert_manifest_path_exists, build, build_and_load_artifacts, get_package_metadata,
     get_scarb_metadata_with_deps, BuildConfig,
 };
 use sncast::response::errors::handle_starknet_command_error;
-use sncast::{chain_id_to_network_name, get_account, get_block_id, get_chain_id, get_default_state_file_name, get_nonce, get_provider, handle_rpc_error, NumbersFormat, ValidatedWaitParams, WaitForTx};
+use sncast::{
+    chain_id_to_network_name, get_account, get_block_id, get_chain_id, get_default_state_file_name,
+    get_nonce, get_provider, handle_rpc_error, NumbersFormat, ValidatedWaitParams, WaitForTx,
+};
+use starknet::core::types::{BlockId, BlockTag};
 use starknet::core::utils::get_selector_from_name;
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{JsonRpcClient, Provider};
 use starknet_commands::verify::Verify;
 use tokio::runtime::Runtime;
-use sncast::helpers::data_transformer::transform_input_calldata;
 
 mod starknet_commands;
 
@@ -227,11 +230,22 @@ async fn run_async_command(
                 config.keystore,
             )
             .await?;
+
+            let transformed_calldata = match deploy.constructor_calldata {
+                Some(calldata) => transform_input_calldata(
+                    calldata,
+                    &"constructor".to_string(),
+                    deploy.class_hash,
+                    &provider,
+                )
+                .await
+                .context("Failed to serialize input calldata")?,
+                None => vec![],
+            };
+
             let mut result = starknet_commands::deploy::deploy(
                 deploy.class_hash,
-                transform_input_calldata(deploy.constructor_calldata, "constructor".to_string(), deploy.class_hash, &provider)
-                    .await
-                    .context("Failed to serialize input calldata")?,
+                transformed_calldata,
                 deploy.salt,
                 deploy.unique,
                 deploy.fee.max_fee,
@@ -247,15 +261,36 @@ async fn run_async_command(
         }
         Commands::Call(call) => {
             let block_id = get_block_id(&call.block_id)?;
-            let contract_class_hash = provider.get_class_hash_at(BlockId::Tag(BlockTag::Latest), call.contract_address).await.map_err(handle_rpc_error).context(format!("Couldn't retrieve class hash of the contract with address: {}", call.contract_address))?;
+
+            let selector = get_selector_from_name(&call.function)
+                .context("Failed to convert entry point selector to FieldElement")?;
+
+            let transformed_calldata = match call.calldata {
+                Some(calldata) => {
+                    let contract_class_hash = provider
+                        .get_class_hash_at(BlockId::Tag(BlockTag::Latest), call.contract_address)
+                        .await
+                        .map_err(handle_rpc_error)
+                        .context(format!(
+                            "Couldn't retrieve class hash of the contract with address: {}",
+                            call.contract_address
+                        ))?;
+                    transform_input_calldata(
+                        calldata,
+                        &call.function,
+                        contract_class_hash,
+                        &provider,
+                    )
+                    .await
+                    .context("Failed to serialize input calldata")?
+                }
+                None => vec![],
+            };
 
             let mut result = starknet_commands::call::call(
                 call.contract_address,
-                get_selector_from_name(&call.function)
-                    .context("Failed to convert entry point selector to FieldElement")?,
-                transform_input_calldata(call.calldata, call.function, contract_class_hash, &provider)
-                    .await
-                    .context("Failed to serialize input calldata")?,
+                selector,
+                transformed_calldata,
                 &provider,
                 block_id.as_ref(),
             )
@@ -273,14 +308,36 @@ async fn run_async_command(
                 config.keystore,
             )
             .await?;
-            let contract_class_hash = provider.get_class_hash_at(BlockId::Tag(BlockTag::Latest), invoke.contract_address).await.map_err(handle_rpc_error).context(format!("Couldn't retrieve class hash of the contract with address: {}", invoke.contract_address))?;
+
+            let selector = get_selector_from_name(&invoke.function)
+                .context("Failed to convert entry point selector to FieldElement")?;
+
+            let transformed_calldata = match invoke.calldata {
+                Some(calldata) => {
+                    let contract_class_hash = provider
+                        .get_class_hash_at(BlockId::Tag(BlockTag::Latest), invoke.contract_address)
+                        .await
+                        .map_err(handle_rpc_error)
+                        .context(format!(
+                            "Couldn't retrieve class hash of the contract with address: {}",
+                            invoke.contract_address
+                        ))?;
+                    transform_input_calldata(
+                        calldata,
+                        &invoke.function,
+                        contract_class_hash,
+                        &provider,
+                    )
+                    .await
+                    .context("Failed to serialize input calldata")?
+                }
+                None => vec![],
+            };
+
             let mut result = starknet_commands::invoke::invoke(
                 invoke.contract_address,
-                get_selector_from_name(&invoke.function)
-                    .context("Failed to convert entry point selector to FieldElement")?,
-                transform_input_calldata(invoke.calldata, invoke.function, contract_class_hash, &provider)
-                    .await
-                    .context("Failed to serialize input calldata")?,
+                selector,
+                transformed_calldata,
                 invoke.fee.max_fee,
                 &account,
                 invoke.nonce,

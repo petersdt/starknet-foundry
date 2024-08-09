@@ -22,9 +22,9 @@ pub struct Deploy {
     #[clap(short = 'g', long)]
     pub class_hash: FieldElement,
 
-    /// Calldata for the contract constructor
+    /// Calldata for the contract constructor - Cairo-like expression
     #[clap(short, long)]
-    pub constructor_calldata: String,
+    pub constructor_calldata: Option<String>,
 
     /// Salt for the address
     #[clap(short, long)]

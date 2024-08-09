@@ -24,7 +24,7 @@ async fn test_happy_case(account: &str) {
         "--function",
         "put",
         "--calldata",
-        "0x1 0x2",
+        "{0x1, 0x2}",
         "--max-fee",
         "99999999999999999",
         "--fee-token",
@@ -106,19 +106,21 @@ fn test_wrong_calldata() {
         "--function",
         "put",
         "--calldata",
-        "0x1",
+        "{0x1}",
         "--fee-token",
         "eth",
     ]);
 
     let snapbox = runner(&args);
-    let output = snapbox.assert().success();
+    let output = snapbox.assert().failure();
 
     assert_stderr_contains(
         output,
         indoc! {r"
-        command: invoke
-        error: An error occurred in the called contract[..]Failed to deserialize param #2[..]
+        Error: Failed to serialize input calldata
+
+        Caused by:
+            Invalid number of arguments, passed 1, expected 2
         "},
     );
 }
@@ -136,8 +138,7 @@ fn test_too_low_max_fee() {
         "--function",
         "put",
         "--calldata",
-        "0x1",
-        "0x2",
+        "{0x1, 0x2}",
         "--max-fee",
         "1",
         "--fee-token",

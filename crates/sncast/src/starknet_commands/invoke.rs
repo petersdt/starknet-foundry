@@ -22,9 +22,9 @@ pub struct Invoke {
     #[clap(short, long)]
     pub function: String,
 
-    /// Calldata for the invoked function
+    /// Calldata for the invoked function - Cairo-like expression
     #[clap(short, long)]
-    pub calldata: String,
+    pub calldata: Option<String>,
 
     #[clap(flatten)]
     pub fee: FeeArgs,

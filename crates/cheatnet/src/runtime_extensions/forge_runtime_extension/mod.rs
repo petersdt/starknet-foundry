@@ -37,6 +37,7 @@ use cairo_vm::vm::{
 use conversions::byte_array::ByteArray;
 use conversions::serde::deserialize::{BufferReader, CairoDeserialize};
 use conversions::serde::serialize::CairoSerialize;
+use conversions::u256::CairoU256;
 use conversions::{felt252::TryInferFormat, IntoConv};
 use runtime::{
     CheatcodeHandlingResult, EnhancedHintError, ExtendedRuntime, ExtensionLogic,
@@ -46,7 +47,6 @@ use starknet::core::types::FieldElement;
 use starknet::signers::SigningKey;
 use starknet_api::{core::ClassHash, deprecated_contract_class::EntryPointType::L1Handler};
 use std::collections::HashMap;
-use conversions::u256::CairoU256;
 
 pub mod cheatcodes;
 pub mod contracts_data;

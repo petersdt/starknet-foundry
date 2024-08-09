@@ -53,9 +53,7 @@ async fn test_happy_case_with_constructor() {
         "--fee-token",
         "eth",
         "--constructor-calldata",
-        "0x1",
-        "0x1",
-        "0x0",
+        "{0x1, 0x1}",
         "--class-hash",
         CONSTRUCTOR_WITH_PARAMS_CONTRACT_CLASS_HASH_SEPOLIA,
     ]);
@@ -81,17 +79,19 @@ fn test_wrong_calldata() {
         "--class-hash",
         CONSTRUCTOR_WITH_PARAMS_CONTRACT_CLASS_HASH_SEPOLIA,
         "--constructor-calldata",
-        "0x1 0x1",
+        "{0x1}",
     ]);
 
     let snapbox = runner(&args);
-    let output = snapbox.assert().success();
+    let output = snapbox.assert().failure();
 
     assert_stderr_contains(
         output,
         indoc! {r"
-        command: deploy
-        error: An error occurred in the called contract[..]Failed to deserialize param #2[..]
+        Error: Failed to serialize input calldata
+
+        Caused by:
+            Invalid number of arguments, passed 1, expected 2
         "},
     );
 }
