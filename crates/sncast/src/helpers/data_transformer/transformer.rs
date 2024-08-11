@@ -436,3 +436,736 @@ pub async fn transform_input_calldata(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::transform_input_calldata;
+    use conversions::string::TryFromHexStr;
+    use conversions::IntoConv;
+    use shared::rpc::create_rpc_client;
+    use starknet::core::utils::get_selector_from_name;
+    use starknet_crypto::FieldElement;
+    use starknet_types_core::felt::Felt as Felt252;
+
+    // https://sepolia.starkscan.co/class/0x05cf2011fdcab16c211fd0f249a3decf3475886a7e020ba10f3b001f1eed8119#code
+    const DATA_TRANSFORMER_TEST_CLASS_HASH: &str =
+        "0x05cf2011fdcab16c211fd0f249a3decf3475886a7e020ba10f3b001f1eed8119";
+
+    // 2^128 + 3
+    const BIG_NUMBER: &str = "340282366920938463463374607431768211459";
+
+    fn u128s_to_felts(vec: Vec<u128>) -> Vec<FieldElement> {
+        vec.into_iter().map(FieldElement::from).collect()
+    }
+
+    #[tokio::test]
+    async fn test_invalid_input() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            " 0x1 }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains("Couldn't parse input calldata, missing {"));
+
+        //////////////
+
+        let output = transform_input_calldata(
+            "{ 0x1".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains("Couldn't parse input calldata, missing }"));
+
+        //////////////
+
+        let output = transform_input_calldata(
+            "0x1".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains("Couldn't parse input calldata, missing {"));
+    }
+    #[tokio::test]
+    async fn test_function_not_found() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            "{ 0x1 }".to_string(),
+            &get_selector_from_name("nonexistent_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Function "nonexistent_fn" not found in ABI of the contract"#));
+    }
+    #[tokio::test]
+    async fn test_invalid_suffix() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            "{ 1_u10 }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+        dbg!(&output);
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Failed to parse value "1" into type "u10": unsupported type"#));
+    }
+    #[tokio::test]
+    async fn test_number_suffix() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            "{ 1_u256 }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        // TODO not sure about that behaviour, simple_fn accepts felt252
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![1, 0]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_invalid_cairo_expression() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            "{ aaa: }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid Cairo expression found in input calldata:"));
+    }
+    #[tokio::test]
+    async fn test_invalid_arg_number() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            "{ 0x1, 0x2, 0x3 }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid number of arguments, passed 3, expected 1"));
+    }
+    #[tokio::test]
+    async fn test_simple_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn simple_fn(self:@T, a: felt252);
+            "{ 0x1 }".to_string(),
+            &get_selector_from_name("simple_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![0x1]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+
+    #[tokio::test]
+    async fn test_u256_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn u256_fn(self:@T, a: u256);
+            format!("{{ {} }}", BIG_NUMBER),
+            &get_selector_from_name("u256_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![3, 1]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_signed_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn signed_fn(self:@T, a: i32);
+            "{ -1 }".to_string(),
+            &get_selector_from_name("signed_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = vec![Felt252::from(-1).into_()];
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_signed_fn_overflow() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        // i32max = 2147483647
+        let output = transform_input_calldata(
+            // fn signed_fn(self:@T, a: i32);
+            "{ 2147483648 }".to_string(),
+            &get_selector_from_name("signed_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Failed to parse value "2147483648" into type "i32""#));
+    }
+    #[tokio::test]
+    async fn test_unsigned_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        // u32max = 4294967295
+        let output = transform_input_calldata(
+            // fn unsigned_fn(self:@T, a: u32);
+            "{ 4294967295 }".to_string(),
+            &get_selector_from_name("unsigned_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![4294967295]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_tuple_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn tuple_fn(self:@T, a: (felt252, u8, Enum));
+            "{ (123, 234, Enum::Three(NestedStructWithField {a: SimpleStruct {a: 345}, b: 456 })) }".to_string(),
+            &get_selector_from_name("tuple_fn").unwrap(),
+            contract_address,
+            &client
+        ).await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![123, 234, 2, 345, 456]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_complex_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn complex_fn(self: @T, arr: Array<Array<felt252>>, one: u8, two: i16, three: ByteArray, four: (felt252, u32), five: bool, six: u256);
+            r#"{ array![array![0,1,2], array![3,4,5,6,7]], 8, 9, "ten", (11, 12), true, 13 }"#
+                .to_string(),
+            &get_selector_from_name("complex_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+        dbg!(&output);
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![
+            2, 3, 0, 1, 2, 5, 3, 4, 5, 6, 7, 8, 9, 0, 7628142, 3, 11, 12, 1, 13, 0,
+        ]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_simple_struct_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn simple_struct_fn(self: @T, a: SimpleStruct);
+            "{ SimpleStruct {a: 0x12} }".to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![0x12]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+
+    #[tokio::test]
+    async fn test_simple_struct_fn_invalid_struct_arg() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn simple_struct_fn(self: @T, a: SimpleStruct);
+            r#"{ SimpleStruct {a: "string"} }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Failed to parse value "string" into type "core::felt252""#))
+    }
+    #[tokio::test]
+    async fn test_simple_struct_fn_invalid_struct_name() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn simple_struct_fn(self: @T, a: SimpleStruct);
+            r#"{ InvalidStructName {a: "string"} }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(r#"Invalid argument type, expected "data_tranformer_contract::SimpleStruct", got "InvalidStructName""#))
+    }
+    #[tokio::test]
+    async fn test_simple_struct_fn_invalid_arg() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn simple_struct_fn(self: @T, a: SimpleStruct);
+            r#"{ 0x1 }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(
+            r#"Failed to parse value "1" into type "data_tranformer_contract::SimpleStruct""#
+        ));
+
+        let output = transform_input_calldata(
+            r#"{ "string_argument" }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(r#"Failed to parse value "string_argument" into type "data_tranformer_contract::SimpleStruct""#));
+
+        let output = transform_input_calldata(
+            r#"{ 'shortstring' }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(r#"Failed to parse value "shortstring" into type "data_tranformer_contract::SimpleStruct""#));
+
+        let output = transform_input_calldata(
+            r#"{ true }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(
+            r#"Failed to parse value "true" into type "data_tranformer_contract::SimpleStruct""#
+        ));
+
+        let output = transform_input_calldata(
+            r#"{ array![0x1, 2, 0x3, 04] }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(
+            r#"Invalid argument type, expected "data_tranformer_contract::SimpleStruct", got array"#
+        ));
+
+        let output = transform_input_calldata(
+            r#"{ (1, array![2], 0x3) }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(
+            r#"Invalid argument type, expected "data_tranformer_contract::SimpleStruct", got tuple"#
+        ));
+
+        let output = transform_input_calldata(
+            r#"{ My::Enum }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(
+            r#"Invalid argument type, expected "data_tranformer_contract::SimpleStruct", got "My""#
+        ));
+
+        let output = transform_input_calldata(
+            r#"{ core::path::My::Enum(10) }"#.to_string(),
+            &get_selector_from_name("simple_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(r#"Invalid argument type, expected "data_tranformer_contract::SimpleStruct", got "core::path::My""#));
+    }
+
+    #[tokio::test]
+    async fn test_nested_struct_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn nested_struct_fn(self: @T, a: NestedStructWithField);
+            r#"{ NestedStructWithField { a: SimpleStruct { a: 0x24 }, b: 96 } }"#.to_string(),
+            &get_selector_from_name("nested_struct_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![0x24, 96]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+
+    // enum Enum
+    // One,
+    // #[default]
+    // Two: u128,
+    // Three: NestedStructWithField
+
+    #[tokio::test]
+    async fn test_enum_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn enum_fn(self: @T, a: Enum);
+            r#"{ Enum::One }"#.to_string(),
+            &get_selector_from_name("enum_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![0]);
+
+        assert_eq!(output.unwrap(), expected_output);
+
+        /////////////
+
+        let output = transform_input_calldata(
+            r#"{ Enum::Two(128) }"#.to_string(),
+            &get_selector_from_name("enum_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![1, 128]);
+
+        assert_eq!(output.unwrap(), expected_output);
+
+        /////////////
+
+        let output = transform_input_calldata(
+            r#"{ Enum::Three(NestedStructWithField { a: SimpleStruct { a: 123 }, b: 234 }) }"#
+                .to_string(),
+            &get_selector_from_name("enum_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![2, 123, 234]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+
+    #[tokio::test]
+    async fn test_enum_fn_invalid_variant() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn enum_fn(self: @T, a: Enum);
+            r#"{ Enum::Four }"#.to_string(),
+            &get_selector_from_name("enum_fn").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Couldn't find variant "Four" in enum "Enum""#))
+    }
+
+    #[tokio::test]
+    async fn test_complex_struct_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        // struct ComplexStruct
+        //     a: NestedStructWithField,
+        //     b: felt252,
+        //     c: u8,
+        //     d: i32,
+        //     e: Enum,
+        //     f: ByteArray,
+        //     g: Array<felt252>,
+        //     h: u256,
+        //     i: (i128, u128),
+
+        let output = transform_input_calldata(
+            // fn complex_struct_fn(self: @T, a: ComplexStruct);
+            r#"{ ComplexStruct {a: NestedStructWithField { a: SimpleStruct { a: 1 }, b: 2 }, b: 3, c: 4, d: 5, e: Enum::Two(6), f: "seven", g: array![8, 9], h: 10, i: (11, 12) } }"#.to_string(),
+            &get_selector_from_name("complex_struct_fn").unwrap(),
+            contract_address,
+            &client
+        ).await;
+        assert!(output.is_ok());
+
+        // 1 2 - a: NestedStruct
+        // 3 - b: felt252
+        // 4 - c: u8
+        // 5 - d: i32
+        // 1 6 - e: Enum
+        // 0 495623497070 5 - f: string (ByteArray)
+        // 2 8 9 - g: array!
+        // 10 0 - h: u256
+        // 11 12 - i: (i128, u128)
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![
+            1,
+            2,
+            3,
+            4,
+            5,
+            1,
+            6,
+            0,
+            495623497070,
+            5,
+            2,
+            8,
+            9,
+            10,
+            0,
+            11,
+            12,
+        ]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+
+    // TODO add similar test but with enums
+    //  - take existing contract code
+    //  - find/create a library with an enum
+    //  - add to project as a dependency
+    //  - create enum with the same name in your contract code
+    #[tokio::test]
+    async fn test_external_struct_fn_ambiguity() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn external_struct_fn(self:@T, a: BitArray, b: bit_array::BitArray);
+            "{ BitArray { bit: 23 }, BitArray { data: array![0], current: 1, read_pos: 2, write_pos: 3 } }".to_string(),
+            &get_selector_from_name("external_struct_fn").unwrap(),
+            contract_address,
+            &client
+        ).await;
+
+        assert!(output.is_err());
+        assert!(output.unwrap_err().to_string().contains(r#"Found more than one struct "BitArray" in ABI, please specify a full path to the struct"#))
+    }
+
+    #[tokio::test]
+    async fn test_external_struct_fn_invalid_path() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn external_struct_fn(self:@T, a: BitArray, b: bit_array::BitArray);
+            "{ something::BitArray { bit: 23 }, BitArray { data: array![0], current: 1, read_pos: 2, write_pos: 3 } }".to_string(),
+            &get_selector_from_name("external_struct_fn").unwrap(),
+            contract_address,
+            &client
+        ).await;
+
+        assert!(output.is_err());
+        assert!(output
+            .unwrap_err()
+            .to_string()
+            .contains(r#"Struct "something::BitArray" not found in ABI"#))
+    }
+    #[tokio::test]
+    async fn test_external_struct_fn() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn external_struct_fn(self:@T, a: BitArray, b: bit_array::BitArray);
+            "{ data_tranformer_contract::BitArray { bit: 23 }, alexandria_data_structures::bit_array::BitArray { data: array![0], current: 1, read_pos: 2, write_pos: 3 } }".to_string(),
+            &get_selector_from_name("external_struct_fn").unwrap(),
+            contract_address,
+            &client
+        ).await;
+
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![23, 1, 0, 1, 2, 3]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+    #[tokio::test]
+    async fn test_constructor() {
+        let client = create_rpc_client("http://188.34.188.184:7070/rpc/v0_7").unwrap();
+        let contract_address: FieldElement =
+            FieldElement::try_from_hex_str(DATA_TRANSFORMER_TEST_CLASS_HASH).unwrap();
+
+        let output = transform_input_calldata(
+            // fn constructor(ref self: ContractState, init_owner: ContractAddress) {}
+            "{ 0x123 }".to_string(),
+            &get_selector_from_name("constructor").unwrap(),
+            contract_address,
+            &client,
+        )
+        .await;
+
+        assert!(output.is_ok());
+
+        let expected_output: Vec<FieldElement> = u128s_to_felts(vec![0x123]);
+
+        assert_eq!(output.unwrap(), expected_output);
+    }
+}
