@@ -5,7 +5,7 @@ fn main() {
     let call_err: ScriptCommandError = call(
         eth.try_into().expect('bad address'),
         selector!("allowance"),
-        array![0x12, 0x12, 0x12, 0x12, 0x12]
+        Option::Some("{ 0x12, 0x12, 0x12, 0x12, 0x12 }")
     )
         .unwrap_err();
 

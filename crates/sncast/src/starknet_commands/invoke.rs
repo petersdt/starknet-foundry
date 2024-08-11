@@ -1,18 +1,21 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Args, ValueEnum};
+use sncast::helpers::data_transformer::transform_input_calldata;
 use sncast::helpers::error::token_not_supported_for_invoke;
 use sncast::helpers::fee::{FeeArgs, FeeSettings, FeeToken, PayableTransaction};
 use sncast::helpers::rpc::RpcArgs;
 use sncast::response::errors::StarknetCommandError;
 use sncast::response::structs::{Felt, InvokeResponse};
-use sncast::{apply_optional, handle_wait_for_tx, impl_payable_transaction, WaitForTx};
-use starknet::accounts::AccountError::Provider;
+use sncast::{
+    apply_optional, handle_rpc_error, handle_wait_for_tx, impl_payable_transaction, WaitForTx,
+};
+use starknet::accounts::AccountError::Provider as ProviderErr;
 use starknet::accounts::{
     Account, Call, ConnectedAccount, ExecutionV1, ExecutionV3, SingleOwnerAccount,
 };
-use starknet::core::types::FieldElement;
+use starknet::core::types::{BlockId, BlockTag, FieldElement};
 use starknet::providers::jsonrpc::HttpTransport;
-use starknet::providers::JsonRpcClient;
+use starknet::providers::{JsonRpcClient, Provider};
 use starknet::signers::LocalWallet;
 
 #[derive(Args, Clone)]
@@ -26,9 +29,9 @@ pub struct Invoke {
     #[clap(short, long)]
     pub function: String,
 
-    /// Calldata for the invoked function
-    #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub calldata: Vec<FieldElement>,
+    /// Calldata for the invoked function - Cairo-like expression
+    #[clap(short, long)]
+    pub calldata: Option<String>,
 
     #[clap(flatten)]
     pub fee_args: FeeArgs,
@@ -67,10 +70,33 @@ pub async fn invoke(
         .clone()
         .fee_token(invoke.token_from_version());
 
+    let transformed_calldata = match invoke.calldata {
+        Some(calldata) => {
+            let contract_class_hash = account
+                .provider()
+                .get_class_hash_at(BlockId::Tag(BlockTag::Latest), invoke.contract_address)
+                .await
+                .map_err(handle_rpc_error)
+                .context(format!(
+                    "Couldn't retrieve class hash of the contract with address: {}",
+                    invoke.contract_address
+                ))?;
+            transform_input_calldata(
+                calldata,
+                &function_selector,
+                contract_class_hash,
+                &account.provider(),
+            )
+            .await
+            .context("Failed to serialize input calldata")?
+        }
+        None => vec![],
+    };
+
     let call = Call {
         to: invoke.contract_address,
         selector: function_selector,
-        calldata: invoke.calldata.clone(),
+        calldata: transformed_calldata,
     };
 
     execute_calls(account, vec![call], fee_args, invoke.nonce, wait_config).await
@@ -119,7 +145,7 @@ pub async fn execute_calls(
         )
         .await
         .map_err(StarknetCommandError::from),
-        Err(Provider(error)) => Err(StarknetCommandError::ProviderError(error.into())),
+        Err(ProviderErr(error)) => Err(StarknetCommandError::ProviderError(error.into())),
         _ => Err(anyhow!("Unknown RPC error").into()),
     }
 }

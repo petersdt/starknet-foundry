@@ -17,7 +17,7 @@ fn test_happy_case() {
         "--function",
         "get",
         "--calldata",
-        "0x0",
+        "{0x0}",
         "--block-id",
         "latest",
     ];
@@ -52,7 +52,7 @@ async fn test_call_after_storage_changed() {
         "--function",
         "get",
         "--calldata",
-        "0x2",
+        "{0x2}",
     ];
 
     let snapbox = runner(&args);
@@ -126,20 +126,21 @@ fn test_wrong_calldata() {
         "--contract-address",
         MAP_CONTRACT_ADDRESS_SEPOLIA,
         "--calldata",
-        "0x1",
-        "0x2",
+        "{0x1, 0x2}",
         "--function",
         "get",
     ];
 
     let snapbox = runner(&args);
-    let output = snapbox.assert().success();
+    let output = snapbox.assert().failure();
 
     assert_stderr_contains(
         output,
         indoc! {r"
-        command: call
-        error: An error occurred [..]Execution failed[..]Input too long for arguments[..]
+        Error: Failed to serialize input calldata
+
+        Caused by:
+            Invalid number of arguments, passed 2, expected 1
         "},
     );
 }
@@ -157,7 +158,7 @@ async fn test_invalid_selector() {
         "--function",
         "ą",
         "--calldata",
-        "0x1 0x2",
+        "{0x1, 0x2}",
     ];
 
     let snapbox = runner(&args);
@@ -187,7 +188,7 @@ fn test_wrong_block_id() {
         "--function",
         "get",
         "--calldata",
-        "0x0",
+        "{0x0}",
         "--block-id",
         "0x10101",
     ];
