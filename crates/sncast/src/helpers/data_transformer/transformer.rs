@@ -1,4 +1,5 @@
 use crate::handle_rpc_error;
+use crate::helpers::data_transformer::sierra_abi::parse_expr;
 use anyhow::{bail, Context, Result};
 use cairo_lang_filesystem::db::FilesGroup;
 use cairo_lang_filesystem::ids::{FileKind, FileLongId, VirtualFile};
@@ -8,14 +9,17 @@ use cairo_lang_syntax::node::ast::{
 };
 use cairo_lang_syntax::node::{SyntaxNode, TypedSyntaxNode};
 use conversions::byte_array::ByteArray;
-use conversions::serde::serialize::{BufferWriter, CairoSerialize};
+use conversions::serde::serialize::{BufferWriter, CairoSerialize, SerializeToFeltVec};
 use conversions::u256::CairoU256;
+use conversions::FromConv;
 use num_bigint::BigUint;
 use starknet::core::types::contract::{AbiEntry, AbiFunction, StateMutability};
 use starknet::core::types::{BlockId, BlockTag, ContractClass};
+use starknet::core::utils::get_selector_from_name;
 use starknet::providers::jsonrpc::HttpTransport;
 use starknet::providers::{JsonRpcClient, Provider};
 use starknet_crypto::FieldElement;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -265,46 +269,6 @@ impl CairoSerialize for AllowedCalldataArguments {
     }
 }
 
-/// Finds ABI constructor and turns it into [`AbiFunction`] to simplify whole flow later
-/// ([`AbiConstructor`] has less fields, but both have `name` and `inputs`)
-fn find_new_abi_constructor(abi: &[AbiEntry]) -> Option<AbiFunction> {
-    let maybe_constructor = abi.iter().find_map(|interface_item| {
-        if let AbiEntry::Constructor(constructor) = interface_item {
-            return Some(constructor);
-        }
-        None
-    });
-    maybe_constructor.map(|constructor| AbiFunction {
-        name: constructor.name.clone(),
-        inputs: constructor.inputs.clone(),
-        outputs: vec![],
-        state_mutability: StateMutability::View,
-    })
-}
-
-fn find_new_abi_fn(abi: &[AbiEntry], fn_name: &String) -> Option<AbiFunction> {
-    if fn_name == "constructor" {
-        return find_new_abi_constructor(abi);
-    }
-    let interfaces: Vec<&Vec<AbiEntry>> = abi
-        .iter()
-        .filter_map(|abi_entry| {
-            if let AbiEntry::Interface(interface) = abi_entry {
-                return Some(&interface.items);
-            }
-            None
-        })
-        .collect();
-    interfaces.into_iter().flatten().find_map(|interface_item| {
-        if let AbiEntry::Function(func) = interface_item {
-            if func.name == *fn_name {
-                return Some(func.clone());
-            }
-        }
-        None
-    })
-}
-
 /// Parses input calldata and puts inside wrapper Cairo code to allow parsing by [`SimpleParserDatabase`]
 fn parse_input_calldata(input_calldata: String, db: &SimpleParserDatabase) -> Result<SyntaxNode> {
     let input_calldata = input_calldata
@@ -391,9 +355,34 @@ fn get_expr_list(parsed_node: SyntaxNode, db: &SimpleParserDatabase) -> Vec<Expr
     }
 }
 
+fn map_functions_to_selectors(abi: &Vec<AbiEntry>) -> HashMap<FieldElement, AbiFunction> {
+    let mut map = HashMap::new();
+    abi.iter().for_each(|abi_entry| {
+        if let AbiEntry::Function(func) = abi_entry {
+            map.insert(
+                get_selector_from_name(func.name.as_str()).unwrap(),
+                func.clone(),
+            );
+        } else if let AbiEntry::Constructor(constructor) = abi_entry {
+            // Turn constructor into AbiFunction to simplify searching for function in
+            // `transform_input_calldata`
+            map.insert(
+                get_selector_from_name(constructor.name.as_str()).unwrap(),
+                AbiFunction {
+                    name: constructor.name.clone(),
+                    inputs: constructor.inputs.clone(),
+                    outputs: vec![],
+                    state_mutability: StateMutability::View,
+                },
+            );
+        }
+    });
+    map
+}
+
 pub async fn transform_input_calldata(
     input_calldata: String,
-    function_name: &String,
+    function_selector: &FieldElement,
     class_hash: FieldElement,
     client: &JsonRpcClient<HttpTransport>,
 ) -> Result<Vec<FieldElement>> {
@@ -413,10 +402,13 @@ pub async fn transform_input_calldata(
         ContractClass::Sierra(sierra_class) => {
             let abi: Vec<AbiEntry> = serde_json::from_str(sierra_class.abi.as_str())
                 .context("Couldn't deserialize ABI received from chain")?;
-            let called_function = find_new_abi_fn(&abi, function_name).context(format!(
-                r#"Function "{}" not found in ABI of the contract"#,
-                function_name
-            ))?;
+            let selector_function_map = map_functions_to_selectors(&abi);
+            let called_function = selector_function_map
+                .get(function_selector)
+                .context(format!(
+                    r#"Function with selector "{}" not found in ABI of the contract"#,
+                    function_selector
+                ))?;
 
             if called_function.inputs.len() != arguments_expr_list.len() {
                 bail!(
@@ -426,11 +418,21 @@ pub async fn transform_input_calldata(
                 )
             }
 
-            todo!();
+            let parsed_exprs = called_function
+                .inputs
+                .iter()
+                .zip(arguments_expr_list)
+                .map(|(param, arg)| parse_expr(arg, param.r#type.clone(), &abi, &db))
+                .collect::<Result<Vec<AllowedCalldataArguments>>>()?;
+
+            Ok(parsed_exprs
+                .iter()
+                .flat_map(|args| args.serialize_to_vec())
+                .map(FieldElement::from_)
+                .collect::<Vec<FieldElement>>())
         }
         ContractClass::Legacy(_legacy_class) => {
             todo!("Finish adding legacy ABI handling");
         }
-    };
-    todo!()
+    }
 }
