@@ -6,6 +6,7 @@ use crate::starknet_commands::{
 };
 use anyhow::{bail, Context, Result};
 use configuration::load_global_config;
+use data_transformer::Calldata;
 use sncast::response::explorer_link::print_block_explorer_link_if_allowed;
 use sncast::response::print::{print_command_result, OutputFormat};
 
@@ -21,10 +22,12 @@ use sncast::helpers::scarb_utils::{
 use sncast::response::errors::handle_starknet_command_error;
 use sncast::response::structs::DeclareDeployResponse;
 use sncast::{
-    chain_id_to_network_name, get_account, get_block_id, get_chain_id, get_default_state_file_name,
-    NumbersFormat, ValidatedWaitParams, WaitForTx,
+    chain_id_to_network_name, get_account, get_block_id, get_chain_id, get_class_hash_by_address,
+    get_contract_class, get_default_state_file_name, NumbersFormat, ValidatedWaitParams, WaitForTx,
 };
+use starknet::accounts::ConnectedAccount;
 use starknet::core::utils::get_selector_from_name;
+use starknet::providers::Provider;
 use starknet_commands::account::list::print_account_list;
 use starknet_commands::declare_deploy::DeclareDeploy;
 use starknet_commands::deploy::DeployResolved;
@@ -78,7 +81,7 @@ struct Cli {
     account: Option<String>,
 
     /// Path to the file holding accounts info
-    #[clap(short = 'f', long = "accounts-file")]
+    #[clap(long = "accounts-file")]
     accounts_file_path: Option<Utf8PathBuf>,
 
     /// Path to keystore file; if specified, --account should be a path to starkli JSON account file
@@ -207,7 +210,13 @@ async fn run_async_command(
                     .map_err(handle_starknet_command_error);
 
             print_command_result("declare", &result, numbers_format, output_format)?;
-            print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+            print_block_explorer_link_if_allowed(
+                &result,
+                output_format,
+                provider.chain_id().await?,
+                config.show_explorer_links,
+                config.block_explorer,
+            );
             Ok(())
         }
 
@@ -243,7 +252,13 @@ async fn run_async_command(
                 .map_err(handle_starknet_command_error);
 
             print_command_result("deploy", &result, numbers_format, output_format)?;
-            print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+            print_block_explorer_link_if_allowed(
+                &result,
+                output_format,
+                provider.chain_id().await?,
+                config.show_explorer_links,
+                config.block_explorer,
+            );
             Ok(())
         }
 
@@ -313,20 +328,35 @@ async fn run_async_command(
             ));
 
             print_command_result("declare-deploy", &result, numbers_format, output_format)?;
-            print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+            print_block_explorer_link_if_allowed(
+                &result,
+                output_format,
+                provider.chain_id().await?,
+                config.show_explorer_links,
+                config.block_explorer,
+            );
             Ok(())
         }
 
         Commands::Call(call) => {
             let provider = call.rpc.get_provider(&config).await?;
 
-            let block_id = get_block_id(&call.block_id)?;
+            let block_id = get_block_id(&block_id)?;
+            let class_hash = get_class_hash_by_address(&provider, contract_address).await?;
+            let contract_class = get_contract_class(class_hash, &provider).await?;
+
+            let selector = get_selector_from_name(&function)
+                .context("Failed to convert entry point selector to FieldElement")?;
+
+            let serialized_calldata = calldata
+                .map(|data| Calldata::from(data).serialized(contract_class, &selector))
+                .transpose()?
+                .unwrap_or_default();
 
             let result = starknet_commands::call::call(
-                call.contract_address,
-                get_selector_from_name(&call.function)
-                    .context("Failed to convert entry point selector to FieldElement")?,
-                call.calldata,
+                contract_address,
+                selector,
+                serialized_calldata,
                 &provider,
                 block_id.as_ref(),
             )
@@ -338,9 +368,21 @@ async fn run_async_command(
         }
 
         Commands::Invoke(invoke) => {
-            let provider = invoke.rpc.get_provider(&config).await?;
-
             invoke.validate()?;
+
+            let fee_token = invoke.token_from_version();
+
+            let Invoke {
+                contract_address,
+                function,
+                calldata,
+                fee_args,
+                rpc,
+                nonce,
+                ..
+            } = invoke;
+
+            let provider = rpc.get_provider(&config).await?;
 
             let account = get_account(
                 &config.account,
@@ -349,10 +391,26 @@ async fn run_async_command(
                 config.keystore,
             )
             .await?;
+
+            let fee_args = fee_args.fee_token(fee_token);
+
+            let selector = get_selector_from_name(&function)
+                .context("Failed to convert entry point selector to FieldElement")?;
+
+            let class_hash = get_class_hash_by_address(&provider, contract_address).await?;
+            let contract_class = get_contract_class(class_hash, &provider).await?;
+
+            let serialized_calldata = calldata
+                .map(|data| Calldata::from(data).serialized(contract_class, &selector))
+                .transpose()?
+                .unwrap_or_default();
+
             let result = starknet_commands::invoke::invoke(
-                invoke.clone(),
-                get_selector_from_name(&invoke.function)
-                    .context("Failed to convert entry point selector to FieldElement")?,
+                contract_address,
+                serialized_calldata,
+                nonce,
+                fee_args,
+                selector,
                 &account,
                 wait_config,
             )
@@ -360,7 +418,13 @@ async fn run_async_command(
             .map_err(handle_starknet_command_error);
 
             print_command_result("invoke", &result, numbers_format, output_format)?;
-            print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+            print_block_explorer_link_if_allowed(
+                &result,
+                output_format,
+                provider.chain_id().await?,
+                config.show_explorer_links,
+                config.block_explorer,
+            );
             Ok(())
         }
 
@@ -403,6 +467,8 @@ async fn run_async_command(
                     print_block_explorer_link_if_allowed(
                         &result,
                         output_format,
+                        provider.chain_id().await?,
+                        config.show_explorer_links,
                         config.block_explorer,
                     );
                 }
@@ -411,18 +477,17 @@ async fn run_async_command(
         }
 
         Commands::Account(account) => match account.command {
-            account::Commands::Add(add) => {
-                let provider = add.rpc.get_provider(&config).await?;
-                let result = starknet_commands::account::add::add(
-                    &config.url,
-                    &add.name.clone(),
+            account::Commands::Import(import) => {
+                let provider = import.rpc.get_provider(&config).await?;
+                let result = starknet_commands::account::import::import(
+                    &import.name.clone(),
                     &config.accounts_file,
                     &provider,
-                    &add,
+                    &import,
                 )
                 .await;
 
-                print_command_result("account add", &result, numbers_format, output_format)?;
+                print_command_result("account import", &result, numbers_format, output_format)?;
                 Ok(())
             }
 
@@ -433,26 +498,29 @@ async fn run_async_command(
                 let account = if config.keystore.is_none() {
                     create
                         .name
+                        .clone()
                         .context("Required argument `--name` not provided")?
                 } else {
                     config.account
                 };
                 let result = starknet_commands::account::create::create(
-                    &config.url,
                     &account,
                     &config.accounts_file,
                     config.keystore,
                     &provider,
                     chain_id,
-                    create.account_type,
-                    create.salt,
-                    create.add_profile,
-                    create.class_hash,
+                    &create,
                 )
                 .await;
 
                 print_command_result("account create", &result, numbers_format, output_format)?;
-                print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+                print_block_explorer_link_if_allowed(
+                    &result,
+                    output_format,
+                    provider.chain_id().await?,
+                    config.show_explorer_links,
+                    config.block_explorer,
+                );
                 Ok(())
             }
 
@@ -475,17 +543,19 @@ async fn run_async_command(
                 .await;
 
                 print_command_result("account deploy", &result, numbers_format, output_format)?;
-                print_block_explorer_link_if_allowed(&result, output_format, config.block_explorer);
+                print_block_explorer_link_if_allowed(
+                    &result,
+                    output_format,
+                    provider.chain_id().await?,
+                    config.show_explorer_links,
+                    config.block_explorer,
+                );
                 Ok(())
             }
 
             account::Commands::Delete(delete) => {
-                let provider = delete.rpc.get_provider(&config).await?;
-
-                let network_name = match delete.network {
-                    Some(network) => network,
-                    None => chain_id_to_network_name(get_chain_id(&provider).await?),
-                };
+                let network_name =
+                    starknet_commands::account::delete::get_network_name(&delete, &config).await?;
 
                 let result = starknet_commands::account::delete::delete(
                     &delete.name,
@@ -538,8 +608,9 @@ async fn run_async_command(
                 &BuildConfig {
                     scarb_toml_path: manifest_path.clone(),
                     json: cli.json,
-                    profile: cli.profile.unwrap_or("dev".to_string()),
+                    profile: cli.profile.unwrap_or("release".to_string()),
                 },
+                false,
             )
             .expect("Failed to build contract");
             let result = starknet_commands::verify::verify(
@@ -591,6 +662,7 @@ fn run_script_command(
                     json: cli.json,
                     profile: cli.profile.clone().unwrap_or("dev".to_string()),
                 },
+                true,
             )
             .expect("Failed to build artifacts");
             // TODO(#2042): remove duplicated compilation
@@ -601,6 +673,7 @@ fn run_script_command(
                     json: cli.json,
                     profile: "dev".to_string(),
                 },
+                "dev",
             )
             .expect("Failed to build script");
             let metadata_with_deps = get_scarb_metadata_with_deps(&manifest_path)?;

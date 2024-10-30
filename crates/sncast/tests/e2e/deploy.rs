@@ -12,8 +12,7 @@ use indoc::indoc;
 use shared::test_utils::output_assert::{assert_stderr_contains, assert_stdout_contains};
 use sncast::helpers::constants::{ARGENT_CLASS_HASH, BRAAVOS_CLASS_HASH, OZ_CLASS_HASH};
 use sncast::AccountType;
-use starknet::core::types::TransactionReceipt::Deploy;
-use starknet_crypto::FieldElement;
+use starknet::core::types::{Felt, TransactionReceipt::Deploy};
 use test_case::test_case;
 
 #[test_case("oz_cairo_0"; "cairo_0_account")]
@@ -101,7 +100,7 @@ async fn test_happy_case_human_readable() {
 #[test_case(ARGENT_CLASS_HASH, AccountType::Argent; "argent_class_hash")]
 #[test_case(BRAAVOS_CLASS_HASH, AccountType::Braavos; "braavos_class_hash")]
 #[tokio::test]
-async fn test_happy_case_strk(class_hash: FieldElement, account_type: AccountType) {
+async fn test_happy_case_strk(class_hash: Felt, account_type: AccountType) {
     let tempdir = create_and_deploy_account(class_hash, account_type).await;
     let args = vec![
         "--accounts-file",
@@ -254,6 +253,7 @@ async fn test_invalid_version_and_token_combination(fee_token: &str, version: &s
         format!("Error: {fee_token} fee token is not supported for {version} deployment."),
     );
 }
+
 #[tokio::test]
 async fn test_happy_case_with_constructor() {
     let args = vec![
@@ -285,6 +285,35 @@ async fn test_happy_case_with_constructor() {
     assert!(matches!(receipt, Deploy(_)));
 }
 
+#[tokio::test]
+async fn test_happy_case_with_constructor_cairo_expression_calldata() {
+    let args = vec![
+        "--accounts-file",
+        ACCOUNT_FILE_PATH,
+        "--account",
+        "user5",
+        "--int-format",
+        "--json",
+        "deploy",
+        "--url",
+        URL,
+        "--fee-token",
+        "eth",
+        "--constructor-calldata",
+        "(0x420, 0x2137_u256)",
+        "--class-hash",
+        CONSTRUCTOR_WITH_PARAMS_CONTRACT_CLASS_HASH_SEPOLIA,
+    ];
+
+    let snapbox = runner(&args);
+    let output = snapbox.assert().success().get_output().stdout.clone();
+
+    let hash = get_transaction_hash(&output);
+    let receipt = get_transaction_receipt(hash).await;
+
+    assert!(matches!(receipt, Deploy(_)));
+}
+
 #[test]
 fn test_wrong_calldata() {
     let args = vec![
@@ -300,7 +329,7 @@ fn test_wrong_calldata() {
         "--class-hash",
         CONSTRUCTOR_WITH_PARAMS_CONTRACT_CLASS_HASH_SEPOLIA,
         "--constructor-calldata",
-        "0x1 0x1",
+        "0x1 0x2 0x3 0x4",
     ];
 
     let snapbox = runner(&args);
@@ -310,7 +339,7 @@ fn test_wrong_calldata() {
         output,
         indoc! {r"
         command: deploy
-        error: An error occurred in the called contract[..]Failed to deserialize param #2[..]
+        error: An error occurred in the called contract[..]('Input too long for arguments')[..]
         "},
     );
 }
@@ -332,14 +361,11 @@ async fn test_contract_not_declared() {
     ];
 
     let snapbox = runner(&args);
-    let output = snapbox.assert().success();
+    let output = snapbox.assert().failure();
 
     assert_stderr_contains(
         output,
-        indoc! {r"
-        command: deploy
-        error: An error occurred in the called contract[..]Class with hash[..]is not declared[..]
-        "},
+        "Error: An error occurred in the called contract[..]Class with hash[..]is not declared[..]",
     );
 }
 

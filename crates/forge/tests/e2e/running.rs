@@ -1,14 +1,19 @@
 use super::common::runner::{
-    get_current_branch, get_remote_url, runner, setup_package, test_runner,
+    get_current_branch, get_remote_url, runner, setup_package, snforge_test_bin_path, test_runner,
 };
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCopy};
+use assert_fs::TempDir;
 use camino::Utf8PathBuf;
+use forge::scarb::config::SCARB_MANIFEST_TEMPLATE_CONTENT;
 use forge::CAIRO_EDITION;
 use indoc::{formatdoc, indoc};
 use shared::test_utils::output_assert::assert_stdout_contains;
-use std::{env, fs, path::Path, str::FromStr};
-use test_utils::tempdir_with_tool_versions;
-use toml_edit::{value, DocumentMut, Item};
+use snapbox::assert_matches;
+use snapbox::cmd::Command as SnapboxCommand;
+use std::ffi::OsString;
+use std::{env, fs, iter, path::Path, str::FromStr};
+use test_utils::{get_local_snforge_std_absolute_path, tempdir_with_tool_versions};
+use toml_edit::{value, DocumentMut, Formatted, InlineTable, Item, Value};
 
 #[test]
 fn simple_package() {
@@ -146,7 +151,7 @@ fn with_failing_scarb_build() {
         output,
         indoc!(
             r"
-                [ERROR] Failed to build test artifacts with Scarb: `scarb` exited with error
+                [ERROR] Failed to build contracts with Scarb: `scarb` exited with error
             "
         ),
     );
@@ -221,7 +226,33 @@ fn with_exact_filter() {
         Running 0 test(s) from src/
         Running 1 test(s) from tests/
         [PASS] simple_package_integrationtest::test_simple::test_two [..]
-        Tests: 1 passed, 0 failed, 0 skipped, 0 ignored, 12 filtered out
+        Tests: 1 passed, 0 failed, 0 skipped, 0 ignored, other filtered out
+        "},
+    );
+}
+
+#[test]
+fn with_exact_filter_and_duplicated_test_names() {
+    let temp = setup_package("duplicated_test_names");
+
+    let output = test_runner(&temp)
+        .arg("duplicated_test_names_integrationtest::tests_a::test_simple")
+        .arg("--exact")
+        .assert()
+        .success();
+
+    assert_stdout_contains(
+        output,
+        indoc! {r"
+        [..]Compiling[..]
+        [..]Finished[..]
+
+
+        Collected 1 test(s) from duplicated_test_names package
+        Running 0 test(s) from src/
+        Running 1 test(s) from tests/
+        [PASS] duplicated_test_names_integrationtest::tests_a::test_simple [..]
+        Tests: 1 passed, 0 failed, 0 skipped, 0 ignored, other filtered out
         "},
     );
 }
@@ -655,79 +686,113 @@ fn with_exit_first_flag() {
     );
 }
 
-// TODO (2274): This test has inherently flawed logic, needs to be re-written
-#[ignore]
 #[test]
-fn init_new_project_test() {
+fn init_new_project() {
     let temp = tempdir_with_tool_versions().unwrap();
 
-    runner(&temp).args(["init", "test_name"]).assert().success();
-    let manifest_path = temp.child("test_name/Scarb.toml");
+    runner(&temp)
+        .args(["init", "test_name"])
+        .env("DEV_DISABLE_SNFORGE_STD_DEPENDENCY", "true")
+        .assert()
+        .success();
 
-    let generated_toml = std::fs::read_to_string(manifest_path.path()).unwrap();
-    let version = env!("CARGO_PKG_VERSION");
-    let expected_toml = formatdoc!(
+    validate_init(&temp, false);
+}
+
+#[test]
+fn init_new_project_from_scarb() {
+    let temp = tempdir_with_tool_versions().unwrap();
+
+    SnapboxCommand::new("scarb")
+        .current_dir(&temp)
+        .args(["new", "test_name"])
+        .env("SCARB_INIT_TEST_RUNNER", "starknet-foundry")
+        .env(
+            "PATH",
+            append_to_path_var(snforge_test_bin_path().parent().unwrap()),
+        )
+        .assert()
+        .success();
+
+    validate_init(&temp, true);
+}
+
+pub fn append_to_path_var(path: &Path) -> OsString {
+    let script_path = iter::once(path.to_path_buf());
+    let os_path = env::var_os("PATH").unwrap();
+    let other_paths = env::split_paths(&os_path);
+    env::join_paths(script_path.chain(other_paths)).unwrap()
+}
+
+fn validate_init(temp: &TempDir, validate_snforge_std: bool) {
+    let manifest_path = temp.join("test_name/Scarb.toml");
+    let scarb_toml = fs::read_to_string(manifest_path.clone()).unwrap();
+
+    let snforge_std_assert = if validate_snforge_std {
+        "\nsnforge_std = { git = \"https://github.com/foundry-rs/starknet-foundry\", tag = \"v[..]\" }"
+    } else {
+        ""
+    };
+
+    let expected = formatdoc!(
         r#"
             [package]
             name = "test_name"
             version = "0.1.0"
-            edition = "{}"
+            edition = "{CAIRO_EDITION}"
 
             # See more keys and their definitions at https://docs.swmansion.com/scarb/docs/reference/manifest.html
 
             [dependencies]
-            starknet = "2.6.4"
+            starknet = "[..]"
 
-            [dev-dependencies]
-            snforge_std = {{ git = "https://github.com/foundry-rs/starknet-foundry", tag = "v{}" }}
+            [dev-dependencies]{}
+            assert_macros = "[..]"
 
             [[target.starknet-contract]]
             sierra = true
 
             [scripts]
             test = "snforge test"
+            {SCARB_MANIFEST_TEMPLATE_CONTENT}
         "#,
-        CAIRO_EDITION,
-        version,
-    );
+        snforge_std_assert
+    ).trim_end()
+    .to_string()+ "\n";
 
-    assert_eq!(generated_toml, expected_toml);
+    assert_matches(&expected, &scarb_toml);
 
-    let remote_url = get_remote_url();
-    let branch = get_current_branch();
-    manifest_path
-        .write_str(&formatdoc!(
-            r#"
-        [package]
-        name = "test_name"
-        version = "0.1.0"
+    let mut scarb_toml = DocumentMut::from_str(&scarb_toml).unwrap();
 
-        [[target.starknet-contract]]
-
-        [dependencies]
-        starknet = "2.5.4"
-
-        [dev-dependencies]
-        snforge_std = {{ git = "https://github.com/{}", branch = "{}" }}
-        "#,
-            remote_url,
-            branch
-        ))
+    let dependencies = scarb_toml
+        .get_mut("dev-dependencies")
+        .unwrap()
+        .as_table_mut()
         .unwrap();
 
-    // Check if template works with current version of snforge_std
-    let output = test_runner(&temp)
+    let local_snforge_std = get_local_snforge_std_absolute_path()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let mut snforge_std = InlineTable::new();
+    snforge_std.insert("path", Value::String(Formatted::new(local_snforge_std)));
+
+    dependencies.remove("snforge_std");
+    dependencies.insert("snforge_std", Item::Value(Value::InlineTable(snforge_std)));
+
+    std::fs::write(manifest_path, scarb_toml.to_string()).unwrap();
+
+    let output = test_runner(temp)
         .current_dir(temp.child(Path::new("test_name")))
         .assert()
         .success();
-    assert_stdout_contains(
-        output,
-        formatdoc!(
-            r"
-        [..]Updating git repository https://github.com/{}
+
+    let expected = indoc!(
+        r"
         [..]Compiling test_name v0.1.0[..]
         [..]Finished[..]
-
 
         Collected 2 test(s) from test_name package
         Running 0 test(s) from src/
@@ -735,10 +800,68 @@ fn init_new_project_test() {
         [PASS] test_name_integrationtest::test_contract::test_increase_balance [..]
         [PASS] test_name_integrationtest::test_contract::test_cannot_increase_balance_with_zero_value [..]
         Tests: 2 passed, 0 failed, 0 skipped, 0 ignored, 0 filtered out
-    ",
-            remote_url.trim_end_matches(".git")
-        ),
+        "
     );
+
+    assert_stdout_contains(output, expected);
+}
+
+#[test]
+#[cfg(feature = "smoke")]
+fn test_init_project_with_custom_snforge_dependency_git() {
+    let temp = tempdir_with_tool_versions().unwrap();
+
+    runner(&temp)
+        .args(["init", "test_name"])
+        .env("DEV_DISABLE_SNFORGE_STD_DEPENDENCY", "true")
+        .assert()
+        .success();
+
+    let manifest_path = temp.child("test_name/Scarb.toml");
+
+    let scarb_toml = std::fs::read_to_string(manifest_path.path()).unwrap();
+    let mut scarb_toml = DocumentMut::from_str(&scarb_toml).unwrap();
+
+    let dependencies = scarb_toml
+        .get_mut("dev-dependencies")
+        .unwrap()
+        .as_table_mut()
+        .unwrap();
+
+    let branch = get_current_branch();
+    let remote_url = format!("https://github.com/{}", get_remote_url());
+
+    let mut snforge_std = InlineTable::new();
+    snforge_std.insert("git", Value::String(Formatted::new(remote_url.clone())));
+    snforge_std.insert("branch", Value::String(Formatted::new(branch)));
+
+    dependencies.remove("snforge_std");
+    dependencies.insert("snforge_std", Item::Value(Value::InlineTable(snforge_std)));
+
+    std::fs::write(manifest_path.path(), scarb_toml.to_string()).unwrap();
+
+    let output = test_runner(&temp)
+        .current_dir(temp.child(Path::new("test_name")))
+        .assert()
+        .success();
+
+    let expected = formatdoc!(
+        r"
+        [..]Updating git repository {}
+        [..]Compiling test_name v0.1.0[..]
+        [..]Finished[..]
+
+        Collected 2 test(s) from test_name package
+        Running 0 test(s) from src/
+        Running 2 test(s) from tests/
+        [PASS] test_name_integrationtest::test_contract::test_increase_balance [..]
+        [PASS] test_name_integrationtest::test_contract::test_cannot_increase_balance_with_zero_value [..]
+        Tests: 2 passed, 0 failed, 0 skipped, 0 ignored, 0 filtered out
+        ",
+        remote_url.trim_end_matches(".git")
+    );
+
+    assert_stdout_contains(output, expected);
 }
 
 #[test]
@@ -867,7 +990,6 @@ fn printing_in_contracts() {
 }
 
 #[test]
-#[ignore] //TODO(#2253) unignore when there exists previous version that supports new attributes
 fn incompatible_snforge_std_version_warning() {
     let temp = setup_package("steps");
     let manifest_path = temp.child("Scarb.toml");
@@ -879,7 +1001,7 @@ fn incompatible_snforge_std_version_warning() {
     scarb_toml["dev-dependencies"]["snforge_std"]["path"] = Item::None;
     scarb_toml["dev-dependencies"]["snforge_std"]["git"] =
         value("https://github.com/foundry-rs/starknet-foundry.git");
-    scarb_toml["dev-dependencies"]["snforge_std"]["tag"] = value("v0.10.1");
+    scarb_toml["dev-dependencies"]["snforge_std"]["tag"] = value("v0.28.0");
     manifest_path.write_str(&scarb_toml.to_string()).unwrap();
 
     let output = test_runner(&temp).assert().failure();
@@ -896,22 +1018,22 @@ fn incompatible_snforge_std_version_warning() {
         Collected 4 test(s) from steps package
         Running 4 test(s) from src/
         [PASS] steps::tests::steps_570030 [..]
-        [FAIL] steps::tests::steps_4000005
+        [FAIL] steps::tests::steps_10000005
 
         Failure data:
             Could not reach the end of the program. RunResources has no remaining steps.
 
-        [FAIL] steps::tests::steps_5699625
+        [FAIL] steps::tests::steps_11250075
 
         Failure data:
             Could not reach the end of the program. RunResources has no remaining steps.
 
-        [PASS] steps::tests::steps_3999990 [..]
+        [PASS] steps::tests::steps_9999990 [..]
         Tests: 2 passed, 2 failed, 0 skipped, 0 ignored, 0 filtered out
 
         Failures:
-            steps::tests::steps_4000005
-            steps::tests::steps_5699625
+            steps::tests::steps_10000005
+            steps::tests::steps_11250075
         "},
     );
 }
