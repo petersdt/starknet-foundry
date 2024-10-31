@@ -384,20 +384,21 @@ fn test_no_scarb_profile() {
 
     let expected = indoc!(
         "
-        [..]
-        [WARNING] Profile profile5 does not exist in scarb, using default 'dev' profile.
-        command: [..]
-        class_hash: [..]
-        contract_address: [..]
-        declare_transaction_hash: [..]
-        deploy_transaction_hash: [..]
+    [..]
+    command: [..]
+    class_hash: [..]
+    contract_address: [..]
+    declare_transaction_hash: [..]
+    deploy_transaction_hash: [..]
 
-        To see declaration and deployment details, visit:
-        class: [..]
-        contract: [..]
-        declaration transaction: [..]
-        deployment transaction: [..]
-        "
+    To see declaration and deployment details, visit:
+    class: [..]
+    contract: [..]
+    declaration transaction: [..]
+    deployment transaction: [..]
+    [..]
+    [WARNING] Profile profile5 does not exist in scarb, using 'release' profile.
+    "
     );
 
     assert_stdout_contains(output, expected);
