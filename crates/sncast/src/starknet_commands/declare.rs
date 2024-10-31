@@ -157,7 +157,9 @@ pub async fn declare(
     wait_config: WaitForTx,
 ) -> Result<DeclareResponse, StarknetCommandError> {
     let contract_artifacts = artifacts.get(&declare.contract).ok_or_else(|| {
-        StarknetCommandError::ContractArtifactsNotFound(ErrorData::new(declare.contract.clone()))
+        StarknetCommandError::ContractArtifactsNotFound(ErrorData {
+            data: ByteArray::from(declare.contract.clone().as_str()),
+        })
     })?;
 
     let contract = contract_artifacts.try_into()?;

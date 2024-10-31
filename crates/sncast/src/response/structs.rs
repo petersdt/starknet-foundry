@@ -220,24 +220,24 @@ impl OutputLink for DeclareDeployResponse {
         let mut links = vec![];
 
         if let Some(ref class_hash) = self.class_hash {
-            links.push(format!("class: {}", provider.class(class_hash.0)));
+            links.push(format!("class: {}", provider.class(*class_hash)));
         }
 
         links.push(format!(
             "contract: {}",
-            provider.contract(self.contract_address.0)
+            provider.contract(self.contract_address)
         ));
 
         if let Some(ref transaction_hash) = self.declare_transaction_hash {
             links.push(format!(
                 "declaration transaction: {}",
-                provider.class(transaction_hash.0)
+                provider.class(*transaction_hash)
             ));
         }
 
         links.push(format!(
             "deployment transaction: {}",
-            provider.transaction(self.deploy_transaction_hash.0)
+            provider.transaction(self.deploy_transaction_hash)
         ));
 
         links.iter().join("\n")

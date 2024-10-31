@@ -1,5 +1,5 @@
 use clap::{Args, ValueEnum};
-use starknet_crypto::FieldElement;
+use starknet::core::types::Felt;
 
 #[derive(ValueEnum, Debug, Clone)]
 pub enum DeployVersion {
@@ -15,11 +15,11 @@ pub struct DeployArgs {
 
     /// Calldata for the contract constructor
     #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub constructor_calldata: Vec<FieldElement>,
+    pub constructor_calldata: Vec<Felt>,
 
     /// Salt for the address
     #[clap(short, long)]
-    pub salt: Option<FieldElement>,
+    pub salt: Option<Felt>,
 
     /// If true, salt will be modified with an account address
     #[clap(long)]
@@ -27,7 +27,7 @@ pub struct DeployArgs {
 
     /// Nonce of the transaction. If not provided, nonce will be set automatically
     #[clap(short, long)]
-    pub nonce: Option<FieldElement>,
+    pub nonce: Option<Felt>,
 
     /// Version of the deployment
     #[clap(short, long)]

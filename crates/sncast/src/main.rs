@@ -25,7 +25,6 @@ use sncast::{
     chain_id_to_network_name, get_account, get_block_id, get_chain_id, get_class_hash_by_address,
     get_contract_class, get_default_state_file_name, NumbersFormat, ValidatedWaitParams, WaitForTx,
 };
-use starknet::accounts::ConnectedAccount;
 use starknet::core::utils::get_selector_from_name;
 use starknet::providers::Provider;
 use starknet_commands::account::list::print_account_list;
@@ -341,20 +340,21 @@ async fn run_async_command(
         Commands::Call(call) => {
             let provider = call.rpc.get_provider(&config).await?;
 
-            let block_id = get_block_id(&block_id)?;
-            let class_hash = get_class_hash_by_address(&provider, contract_address).await?;
+            let block_id = get_block_id(&call.block_id)?;
+            let class_hash = get_class_hash_by_address(&provider, call.contract_address).await?;
             let contract_class = get_contract_class(class_hash, &provider).await?;
 
-            let selector = get_selector_from_name(&function)
+            let selector = get_selector_from_name(&call.function)
                 .context("Failed to convert entry point selector to FieldElement")?;
 
-            let serialized_calldata = calldata
+            let serialized_calldata = call
+                .calldata
                 .map(|data| Calldata::from(data).serialized(contract_class, &selector))
                 .transpose()?
                 .unwrap_or_default();
 
             let result = starknet_commands::call::call(
-                contract_address,
+                call.contract_address,
                 selector,
                 serialized_calldata,
                 &provider,

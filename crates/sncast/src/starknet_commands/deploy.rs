@@ -24,7 +24,7 @@ use starknet::signers::LocalWallet;
 pub struct Deploy {
     /// Class hash of contract to deploy
     #[clap(short = 'g', long, conflicts_with = "contract_name")]
-    pub class_hash: Option<FieldElement>,
+    pub class_hash: Option<Felt>,
 
     // Name of the contract to deploy
     #[clap(long, conflicts_with = "class_hash")]
@@ -32,28 +32,9 @@ pub struct Deploy {
 
     #[clap(flatten)]
     pub args: DeployArgs,
-    /// Arguments of the called function (serialized as a series of felts or written as comma-separated expressions in Cairo syntax)
-    #[clap(short, long, value_delimiter = ' ', num_args = 1..)]
-    pub constructor_calldata: Option<Vec<String>>,
-
-    /// Salt for the address
-    #[clap(short, long)]
-    pub salt: Option<Felt>,
-
-    /// If true, salt will be modified with an account address
-    #[clap(long)]
-    pub unique: bool,
 
     #[clap(flatten)]
     pub fee_args: FeeArgs,
-
-    /// Nonce of the transaction. If not provided, nonce will be set automatically
-    #[clap(short, long)]
-    pub nonce: Option<Felt>,
-
-    /// Version of the deployment (can be inferred from fee token)
-    #[clap(short, long)]
-    pub version: Option<DeployVersion>,
 
     #[clap(flatten)]
     pub rpc: RpcArgs,
@@ -103,19 +84,19 @@ impl Deploy {
         contract_artifacts.try_into()
     }
 
-    pub fn resolved_with_class_hash(mut self, value: FieldElement) -> DeployResolved {
+    pub fn resolved_with_class_hash(mut self, value: Felt) -> DeployResolved {
         self.class_hash = Some(value);
         self.try_into().unwrap()
     }
 }
 
 pub struct DeployResolved {
-    pub class_hash: FieldElement,
-    pub constructor_calldata: Vec<FieldElement>,
-    pub salt: Option<FieldElement>,
+    pub class_hash: Felt,
+    pub constructor_calldata: Vec<Felt>,
+    pub salt: Option<Felt>,
     pub unique: bool,
     pub fee_args: FeeArgs,
-    pub nonce: Option<FieldElement>,
+    pub nonce: Option<Felt>,
     pub version: Option<DeployVersion>,
 }
 
@@ -163,11 +144,23 @@ pub async fn deploy(
     account: &SingleOwnerAccount<&JsonRpcClient<HttpTransport>, LocalWallet>,
     wait_config: WaitForTx,
 ) -> Result<DeployResponse, StarknetCommandError> {
+    let DeployResolved {
+        class_hash,
+        constructor_calldata,
+        salt,
+        unique,
+        nonce,
+        fee_args,
+        ..
+    } = deploy;
     let salt = extract_or_generate_salt(salt);
     let factory = ContractFactory::new(class_hash, account);
+    let fee_settings = fee_args
+        .try_into_fee_settings(account.provider(), account.block_id())
+        .await?;
     let result = match fee_settings {
         FeeSettings::Eth { max_fee } => {
-            let execution = factory.deploy_v1(calldata.clone(), salt, unique);
+            let execution = factory.deploy_v1(constructor_calldata.clone(), salt, unique);
             let execution = match max_fee {
                 None => execution,
                 Some(max_fee) => execution.max_fee(max_fee),
@@ -182,7 +175,7 @@ pub async fn deploy(
             max_gas,
             max_gas_unit_price,
         } => {
-            let execution = factory.deploy_v3(calldata.clone(), salt, unique);
+            let execution = factory.deploy_v3(constructor_calldata.clone(), salt, unique);
 
             let execution = match max_gas {
                 None => execution,
@@ -209,7 +202,7 @@ pub async fn deploy(
                     salt,
                     class_hash,
                     &udc_uniqueness(unique, account.address()),
-                    calldata,
+                    &constructor_calldata,
                 ),
                 transaction_hash: result.transaction_hash,
             },

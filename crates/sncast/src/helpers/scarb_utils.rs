@@ -7,6 +7,7 @@ use scarb_api::{
 };
 use scarb_ui::args::PackagesFilter;
 use shared::{command::CommandExt, print::print_as_warning};
+use starknet::core::types::Felt;
 use starknet::{
     core::types::{
         contract::{CompiledClass, SierraClass},
@@ -14,7 +15,7 @@ use starknet::{
     },
     providers::{jsonrpc::HttpTransport, JsonRpcClient, Provider, ProviderError},
 };
-use starknet_crypto::FieldElement;
+
 use std::collections::HashMap;
 use std::env;
 use std::str::FromStr;
@@ -212,13 +213,14 @@ pub fn read_manifest_and_build_artifacts(
         profile,
     };
 
-    build_and_load_artifacts(&package_metadata, &build_config).context("Failed to build contract")
+    build_and_load_artifacts(&package_metadata, &build_config, false)
+        .context("Failed to build contract")
 }
 
 pub struct CompiledContract {
     pub class: FlattenedSierraClass,
-    pub sierra_class_hash: FieldElement,
-    pub casm_class_hash: FieldElement,
+    pub sierra_class_hash: Felt,
+    pub casm_class_hash: Felt,
 }
 
 impl TryFrom<&StarknetContractArtifacts> for CompiledContract {
