@@ -123,7 +123,7 @@ pub struct DeclareDeployResponse {
 
 impl DeclareDeployResponse {
     #[must_use]
-    pub fn new(declare: &Option<DeclareResponse>, deploy: DeployResponse) -> Self {
+    pub fn new(declare: &Option<DeclareResponse>, deploy: &DeployResponse) -> Self {
         let class_hash = declare.as_ref().map(|it| it.class_hash);
         let declare_transaction_hash = declare.as_ref().map(|it| it.transaction_hash);
 
@@ -135,8 +135,8 @@ impl DeclareDeployResponse {
         Self {
             class_hash,
             declare_transaction_hash,
-            contract_address,
-            deploy_transaction_hash,
+            contract_address: *contract_address,
+            deploy_transaction_hash: *deploy_transaction_hash,
         }
     }
 }

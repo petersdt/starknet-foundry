@@ -323,7 +323,7 @@ async fn run_async_command(
 
             let result = Ok(DeclareDeployResponse::new(
                 &declare_result,
-                deploy_result.unwrap(),
+                &deploy_result.unwrap(),
             ));
 
             print_command_result("declare-deploy", &result, numbers_format, output_format)?;
