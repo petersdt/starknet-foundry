@@ -115,14 +115,14 @@ $ snforge test --detailed-resources
 Collected 2 test(s) from hello_starknet package
 Running 2 test(s) from tests/
 [PASS] hello_starknet_integrationtest::test_contract::test_cannot_increase_balance_with_zero_value (gas: ~105)
-        steps: 3405
-        memory holes: 22
+        steps: [..]
+        memory holes: [..]
         builtins: ([..])
         syscalls: ([..])
         
 [PASS] hello_starknet_integrationtest::test_contract::test_increase_balance (gas: ~172)
-        steps: 4535
-        memory holes: 15
+        steps: [..]
+        memory holes: [..]
         builtins: ([..])
         syscalls: ([..])
         
